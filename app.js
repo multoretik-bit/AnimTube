@@ -1,299 +1,556 @@
 /**
- * AnimTube Studio v11.50 - Restoration & Simplification
- * Goal: Fix "Dead Button" by simplifying initialization and navigation.
+ * AnimTube PRO v9.6 - REFINED PRODUCTION Engine
+ * Sequential Logic: 60s (Gen) -> 3s (Extension Transfer) -> 3s (Studio Landing)
  */
 
-// --- GLOBAL STATE ---
 let db = null;
+
 let state = {
-    activePage: 'home',
-    keys: JSON.parse(localStorage.getItem('animtube_keys') || '{"gemini":"", "prefix":""}'),
+    activePage: 'videos',
+    keys: JSON.parse(localStorage.getItem('animtube_keys') || '{"gemini":"", "grok":""}'),
     projects: JSON.parse(localStorage.getItem('animtube_projects') || '[]'),
-    activeProjectId: localStorage.getItem('animtube_active_project') || null,
+    activeProjectId: null,
     assembly: {
         isRunning: false,
+        timerId: null,
+        countDown: 0,
         currentIdx: 0,
         queue: [],
+        isWaitingForImage: false,
         lastSentPrompt: "",
-        pendingImage: null
+        pendingImage: null // Store image while waiting for the final switch back
     }
 };
 
-const DEFAULT_PREFIX = "Create an image that closely resembles the Peppa Pig cartoon style: 1920×1080. ";
+const STYLE_PREFIX = "Create an image that closely resembles the style of the Peppa Pig cartoon, using the settings and art style of the Peppa Pig animated series: ";
 
-// --- INITIALIZE (Synchronous logic for reliability) ---
+// --- INITIALIZE ---
 window.onload = async () => {
-    console.log("🛠️ AnimTube v11.50 Booting...");
-    
-    // 1. Database
     await initDB();
-    
-    // 2. State & UI
-    if (state.activeProjectId) {
-        // Re-open last project if exists
-        const p = state.projects.find(x => x.id === state.activeProjectId);
-        if (p) showPage('hub');
-    }
-    
+    loadKeysData();
     renderProjects();
     setupGlobalListeners();
-    console.log("🚀 AnimTube v11.50 Ready.");
+    console.log("🚀 AnimTube v9.6 Refined Engine loaded.");
+    logStatus("✨ AnimTube v9.6 Pure Production Loaded.", "success");
 };
 
-async function initDB() {
-    return new Promise((r) => {
-        const req = indexedDB.open("AnimTubeDB", 1);
-        req.onupgradeneeded = (e) => {
-            const d = e.target.result;
-            if (!d.objectStoreNames.contains("images")) d.createObjectStore("images", { keyPath: "id" });
-            if (!d.objectStoreNames.contains("assets")) d.createObjectStore("assets", { keyPath: "id" });
-        };
-        req.onsuccess = (e) => { db = e.target.result; r(); };
-    });
-}
-
 function setupGlobalListeners() {
-    // Paste listener for manual/auto-paste
+    // Capture Slot Context Menu (Right Click guidance)
+    const slot = document.getElementById('capture-slot');
+    if (slot) {
+        slot.addEventListener('contextmenu', (e) => {
+            slot.focus();
+            logStatus("🖱️ Используйте правую кнопку мыши -> Вставить (или Ctrl+V)", "info");
+        });
+    }
+
+    const autoPasteBtn = document.getElementById('btn-auto-paste');
+    if (autoPasteBtn) {
+        autoPasteBtn.onclick = async () => {
+            autoPasteBtn.classList.add('triggering');
+            
+            // 1. First, check our bridge cache (fastest)
+            if (state.assembly.pendingImage) {
+                logStatus("⌨️ Вставка кадра (AnimTube Bridge)...", "success");
+                handleIncomingImage(state.assembly.pendingImage);
+                state.assembly.pendingImage = null;
+                setTimeout(() => autoPasteBtn.classList.remove('triggering'), 500);
+                return;
+            }
+
+            // 2. FALLBACK: Direct System Clipboard Access (Ctrl+V logic)
+            logStatus("⌨️ Чтение системного буфера обмена (Ctrl+V Mode)...", "info");
+            try {
+                const clipboardItems = await navigator.clipboard.read();
+                for (const item of clipboardItems) {
+                    for (const type of item.types) {
+                        if (type.startsWith("image/")) {
+                            const blob = await item.getType(type);
+                            const reader = new FileReader();
+                            reader.onload = (e) => {
+                                handleIncomingImage(e.target.result);
+                                logStatus("✅ Кадр успешно вставлен из буфера!", "success");
+                                autoPasteBtn.classList.remove('triggering');
+                            };
+                            reader.readAsDataURL(blob);
+                            return;
+                        }
+                    }
+                }
+                logStatus("⚠️ В буфере обмена нет картинки!", "error");
+            } catch (err) {
+                logStatus("⚠️ Ошибка доступа к буферу. Нажмите Ctrl+V вручную.", "error");
+                console.error("Clipboard error:", err);
+            }
+            
+            setTimeout(() => autoPasteBtn.classList.remove('triggering'), 500);
+        };
+    }
+
+    // Manual Paste Listener
     document.addEventListener('paste', async (e) => {
         const items = (e.clipboardData || e.originalEvent.clipboardData).items;
         for (const item of items) {
             if (item.type.indexOf("image") !== -1) {
+                const blob = item.getAsFile();
                 const reader = new FileReader();
-                reader.onload = (ev) => handleIncomingImage(ev.target.result);
-                reader.readAsDataURL(item.getAsFile());
+                reader.onload = (event) => {
+                    handleIncomingImage(event.target.result);
+                };
+                reader.readAsDataURL(blob);
             }
         }
     });
 
-    // Message bridge from extension
+    // Extension Messaging Relay
     window.addEventListener("message", (event) => {
         if (!event.data) return;
-        if (event.data.type === "FROM_GEMINI") state.assembly.pendingImage = event.data.base64;
-        if (event.data.type === "ANIMTUBE_CMD_PASTE_AUTO") handleIncomingImage(state.assembly.pendingImage);
+
+        // 1. Status Reporting from Extension
+        if (event.data.type === "ANIMTUBE_STATUS") {
+            logStatus(event.data.text, "info");
+            return;
+        }
+
+        // 2. Image Arrival (Internal transfer from Gemini)
+        if (event.data.type === "FROM_GEMINI") {
+            console.log("📥 Image data received. Staging for landing...");
+            state.assembly.pendingImage = event.data.base64;
+            // We DON'T handle it yet. We wait for the Auto-Paste signal from the extension.
+        }
+
+        // 3. AUTO-PASTE SIGNAL (From Extension)
+        if (event.data.type === "ANIMTUBE_CMD_PASTE_AUTO") {
+            // Extension has focused the tab. CLICK IMMEDIATELY.
+            const btn = document.getElementById('btn-auto-paste');
+            if (btn) btn.click();
+        }
     });
 }
 
-// --- NAVIGATION (Simplified) ---
+async function initDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open("AnimTubeDB", 1);
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains("images")) {
+                db.createObjectStore("images", { keyPath: "id" });
+            }
+        };
+        request.onsuccess = (e) => {
+            db = e.target.result;
+            resolve();
+        };
+        request.onerror = (e) => {
+            console.error("IndexedDB error:", e);
+            reject(e);
+        };
+    });
+}
+
+async function saveImageToDB(id, base64) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(["images"], "readwrite");
+        const store = transaction.objectStore("images");
+        const request = store.put({ id, base64 });
+        request.onsuccess = () => resolve();
+        request.onerror = (e) => reject(e);
+    });
+}
+
+async function getImageFromDB(id) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(["images"], "readonly");
+        const store = transaction.objectStore("images");
+        const request = store.get(id);
+        request.onsuccess = () => resolve(request.result?.base64);
+        request.onerror = (e) => reject(e);
+    });
+}
+
+// --- NAVIGATION ---
 function showPage(pageId) {
     state.activePage = pageId;
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const pEl = document.getElementById(`page-${pageId}`);
-    if (pEl) pEl.classList.add('active');
-
-    // Sidebar tracking
     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-    let navId = pageId;
-    if (['hub', 'workspace', 'videos'].includes(pageId)) navId = 'home';
-    const navItem = document.getElementById(`nav-${navId}`);
+    
+    document.getElementById(`page-${pageId}`).classList.add('active');
+    
+    const navItem = document.getElementById(`nav-${pageId}`);
     if (navItem) navItem.classList.add('active');
-
-    // Renderers
-    if (pageId === 'home') renderProjects();
-    if (pageId === 'hub') renderHub();
-    if (pageId === 'workspace') {
-        renderProjectLibrary();
-        renderProjectPrompts();
-    }
+    
+    if (pageId === 'videos') renderProjects();
 }
 
 // --- PROJECT MANAGEMENT ---
 function createNewProject() {
-    const name = prompt("Введите название нового канала/проекта:", "Мой Фильм");
+    const name = prompt("Введите название видео-папки:", "Новое видео");
     if (!name) return;
 
-    const p = {
-        id: "pj_" + Date.now(),
+    const newProject = {
+        id: Date.now(),
         name: name,
-        created: new Date().toLocaleDateString(),
-        prompts: [],
-        results: [],
-        assets: []
+        promptsText: "", 
+        results: [],     
+        created: new Date().toLocaleDateString()
     };
 
-    state.projects.unshift(p);
+    state.projects.unshift(newProject);
     saveState();
     renderProjects();
 }
 
 function renderProjects() {
-    const container = document.getElementById('channel-list-container');
+    const container = document.getElementById('project-list-container');
     if (!container) return;
-    
+
     if (state.projects.length === 0) {
-        container.innerHTML = `<div class="project-card btn-add-project" onclick="createNewProject()" style="grid-column: 1/-1;">Нажмите, чтобы создать первый канал</div>`;
+        container.innerHTML = `
+            <div class="project-card btn-add-project" onclick="createNewProject()" style="grid-column: 1/-1; height: 180px;">
+                <div class="brand">
+                    <span style="font-size: 24px;">📺</span>
+                    <h1>ANIMTUBE<br><small style="font-size: 10px; color: var(--accent-primary); letter-spacing: 2px;">V9.6 PRODUCTION</small></h1>
+                </div>
+                <p>Нажмите, чтобы создать первый проект</p>
+            </div>
+        `;
         return;
     }
 
     container.innerHTML = state.projects.map(p => `
-        <div class="project-card" onclick="openProject('${p.id}')">
-            <div class="folder-icon">🎬</div>
+        <div class="project-card" onclick="openProject(${p.id})">
+            <div class="folder-icon">📂</div>
             <div class="project-name">${p.name}</div>
-            <div class="channel-card-meta">${p.created}</div>
+            <div class="project-meta">${p.results.length} кадров • ${p.created}</div>
         </div>
     `).join('');
 }
 
 function openProject(id) {
+    const project = state.projects.find(p => p.id === id);
+    if (!project) return;
+
     state.activeProjectId = id;
-    localStorage.setItem('animtube_active_project', id);
-    const p = state.projects.find(x => x.id === id);
-    if (!p) return;
-    document.getElementById('current-channel-name').innerText = p.name.toUpperCase();
-    showPage('hub');
-}
-
-// --- HUB (The 5 Modules User Requested) ---
-function renderHub() {
-    const container = document.getElementById('channel-hub-modules');
-    if (!container) return;
-    const modules = [
-        { id: 'frames', title: 'Создание кадров', icon: '📸', badge: 'Active' },
-        { id: 'assets', title: 'Библиотека ассетов', icon: '📦', badge: 'Active' },
-        { id: 'settings', title: 'Настройки', icon: '⚙️', badge: 'Active' },
-        { id: 'scenario', title: 'Сценарий', icon: '📝', badge: 'Soon' },
-        { id: 'voice', title: 'Озвучка', icon: '🎙️', badge: 'Soon' }
-    ];
-
-    container.innerHTML = modules.map(m => `
-        <div class="hub-card" onclick="openModule('${m.id}')">
-            <div class="hub-icon">${m.icon}</div>
-            <div class="hub-title">${m.title}</div>
-            <div class="hub-badge ${m.badge === 'Active' ? 'active' : ''}">${m.badge}</div>
-        </div>
-    `).join('');
-}
-
-function openModule(mid) {
-    if (mid === 'frames') showPage('workspace');
-    else if (mid === 'settings') showPage('settings');
-    else if (mid === 'assets') showPage('assets');
-    else alert("Модуль находится в разработке!");
-}
-
-// --- GENERATION ENGINE (Restored) ---
-function startRollAssembly() {
-    const p = getCurrentProject();
-    if (!p || !p.prompts || p.prompts.length === 0) return alert("Добавьте промты!");
-
-    state.assembly.queue = [...p.prompts];
-    state.assembly.currentIdx = 0;
-    state.assembly.isRunning = true;
+    document.getElementById('current-project-name').innerText = project.name;
+    document.getElementById('bulk-prompts').value = project.promptsText || "";
     
-    document.getElementById('receiving-slot-panel').style.display = 'block';
-    processNextItem();
-}
-
-async function processNextItem() {
-    if (!state.assembly.isRunning) return;
-    if (state.assembly.currentIdx >= state.assembly.queue.length) {
-        state.assembly.isRunning = false;
-        alert("Генерация завершена!");
-        return;
-    }
-
-    const raw = state.assembly.queue[state.assembly.currentIdx];
-    const prefix = state.keys.prefix || DEFAULT_PREFIX;
-    const full = prefix + raw;
-
-    state.assembly.lastSentPrompt = raw;
-    window.postMessage({ type: "ANIMTUBE_CMD", prompt: full }, "*");
-    
-    state.assembly.currentIdx++;
-    renderProjectPrompts();
-}
-
-async function handleIncomingImage(base64) {
-    if (!base64) return;
-    const p = getCurrentProject();
-    if (!p) return;
-
-    const id = "img_" + Date.now();
-    await db.transaction(["images"], "readwrite").objectStore("images").put({id, base64});
-    
-    p.results.unshift({ id, time: new Date().toLocaleTimeString() });
-    saveState();
     renderProjectLibrary();
-
-    if (state.assembly.isRunning) {
-        setTimeout(processNextItem, 4000);
-    }
+    renderQueue();
+    showPage('workspace');
 }
 
-// --- PROMPT LIST ---
-function renderProjectPrompts() {
-    const p = getCurrentProject();
-    const container = document.getElementById('prompt-list-builder');
-    if (!p || !container) return;
+function deleteCurrentProject() {
+    if (!confirm("Вы уверены, что хотите удалить эту видео-папку? Все кадры будут стерты.")) return;
     
-    container.innerHTML = p.prompts.map((text, i) => `
-        <div class="prompt-item">
-            <div class="prompt-counter">${i+1}</div>
-            <input type="text" class="prompt-input" value="${text}" onchange="updatePrompt(${i}, this.value)">
-            <button onclick="deletePrompt(${i})">🗑️</button>
-        </div>
-    `).join('');
-}
-
-function addPrompt() {
-    const p = getCurrentProject();
-    p.prompts.push("");
-    saveState(); 
-    renderProjectPrompts();
-}
-
-function updatePrompt(i, v) {
-    const p = getCurrentProject();
-    p.prompts[i] = v;
-    saveState();
-}
-
-function deletePrompt(i) {
-    const p = getCurrentProject();
-    p.prompts.splice(i, 1);
-    saveState();
-    renderProjectPrompts();
-}
-
-// --- PROJECT LIBRARY ---
-async function renderProjectLibrary() {
-    const p = getCurrentProject();
-    const container = document.getElementById('project-library-container');
-    if (!p || !container) return;
-    
-    container.innerHTML = "";
-    for (const res of p.results) {
-        const base64 = await new Promise(r => db.transaction(["images"], "readonly").objectStore("images").get(res.id).onsuccess = e => r(e.target.result?.base64));
-        const card = document.createElement('div');
-        card.className = "lib-card";
-        card.innerHTML = `<img src="${base64}"><div class="lib-info">${res.time}</div>`;
-        container.appendChild(card);
+    const project = getCurrentProject();
+    if (project) {
+        project.results.forEach(res => {
+            const transaction = db.transaction(["images"], "readwrite");
+            transaction.objectStore("images").delete(res.id);
+        });
     }
+
+    state.projects = state.projects.filter(p => p.id !== state.activeProjectId);
+    state.activeProjectId = null;
+    saveState();
+    showPage('videos');
 }
 
-// --- HELPERS ---
-function getCurrentProject() { return state.projects.find(x => x.id === state.activeProjectId); }
+async function downloadProjectFiles() {
+    const project = getCurrentProject();
+    if (!project || project.results.length === 0) return alert("Нет кадров для скачивания!");
+    
+    logStatus("💾 Подготовка файлов к скачиванию...", "info");
+    
+    for (let i = 0; i < project.results.length; i++) {
+        const res = project.results[project.results.length - 1 - i]; 
+        const base64 = await getImageFromDB(res.id);
+        if (base64) {
+            const link = document.createElement('a');
+            link.href = base64;
+            link.download = `frame_${project.id}_${i+1}.png`;
+            link.click();
+            await new Promise(r => setTimeout(r, 200));
+        }
+    }
+    logStatus("✅ Все файлы скачаны!", "success");
+}
+
 function saveState() {
     localStorage.setItem('animtube_projects', JSON.stringify(state.projects));
     localStorage.setItem('animtube_keys', JSON.stringify(state.keys));
 }
-function saveKeys() {
-    state.keys.gemini = document.getElementById('key-gemini').value;
-    state.keys.prefix = document.getElementById('setting-prefix').value;
+
+// --- BATCH GENERATION ---
+function startRollAssembly() {
+    const project = getCurrentProject();
+    if (!project) return;
+
+    const textarea = document.getElementById('bulk-prompts');
+    const lines = textarea.value.split('\n').map(l => l.trim()).filter(l => l.length > 2);
+    
+    if (lines.length === 0) return alert("Введите хотя бы один промт!");
+    
+    project.promptsText = textarea.value;
     saveState();
-    alert("Настройки сохранены!");
+
+    state.assembly.queue = lines;
+    state.assembly.currentIdx = 0;
+    state.assembly.isRunning = true;
+    
+    document.getElementById('btn-start-assembly').style.display = 'none';
+    document.getElementById('btn-stop-assembly').style.display = 'flex';
+    document.getElementById('receiving-slot-panel').style.display = 'block';
+    
+    logStatus("🎬 Сборка запущена. Переключаемся в Gemini...", "info");
+    processNextItem();
 }
 
-// --- GLOBAL EXPORTS (Binding HTML to JS) ---
-window.showPage = showPage;
-window.createNewProject = createNewProject;
-window.openProject = openProject;
-window.openModule = openModule;
-window.addPromptToProject = addPrompt;
-window.updatePromptValue = updatePrompt;
-window.deletePromptFromProject = deletePrompt;
-window.startRollAssembly = startRollAssembly;
-window.saveKeys = saveKeys;
-window.downloadProjectFiles = () => {};
-window.deleteCurrentProject = () => {};
-window.syncWithCloud = () => {};
-window.createNewChannel = createNewProject; // Aliasing for the index.html button
+function stopRollAssembly(isManual = true) {
+    state.assembly.isRunning = false;
+    clearTimeout(state.assembly.timerId);
+    document.getElementById('btn-start-assembly').style.display = 'flex';
+    document.getElementById('btn-stop-assembly').style.display = 'none';
+    
+    if (isManual) {
+        logStatus("🛑 Сборка остановлена.", "error");
+    }
+}
+
+function processNextItem() {
+    if (!state.assembly.isRunning) return;
+
+    if (state.assembly.currentIdx >= state.assembly.queue.length) {
+        logStatus("✅ Пакетная сборка завершена!", "success");
+        stopRollAssembly(false);
+        return;
+    }
+
+    const rawPrompt = state.assembly.queue[state.assembly.currentIdx];
+    const fullPrompt = rawPrompt.includes(STYLE_PREFIX) ? rawPrompt : STYLE_PREFIX + rawPrompt;
+    
+    state.assembly.isWaitingForImage = true;
+    
+    const slotBox = document.getElementById('capture-slot');
+    if (slotBox) {
+        slotBox.className = 'receiving-box waiting';
+        slotBox.innerHTML = `
+            <div class="transfer-status">
+                <span class="loading-icon" style="font-size: 40px; display: block; margin-bottom: 15px;">⏳</span>
+                <p id="receiving-text">ОЖИДАНИЕ ПЕРЕДАЧИ ИЗ GEMINI...</p>
+                <button id="btn-auto-paste" class="btn-auto-paste">
+                    <span class="btn-icon">⚡</span> ВСТАВИТЬ КАДР (АВТО)
+                </button>
+                <div style="margin-top: 10px; opacity: 0.5; font-size: 11px;">
+                    [Промт ${state.assembly.currentIdx + 1}/${state.assembly.queue.length}]
+                </div>
+            </div>
+        `;
+        // Re-bind the auto-paste logic to the newly injected button
+        const btn = document.getElementById('btn-auto-paste');
+        if (btn) {
+            btn.onclick = async () => {
+                btn.classList.add('triggering');
+                if (state.assembly.pendingImage) {
+                    handleIncomingImage(state.assembly.pendingImage);
+                    state.assembly.pendingImage = null;
+                    setTimeout(() => btn.classList.remove('triggering'), 500);
+                    return;
+                }
+                
+                // Fallback to Clipboard API
+                try {
+                    const clipboardItems = await navigator.clipboard.read();
+                    for (const item of clipboardItems) {
+                        for (const type of item.types) {
+                            if (type.startsWith("image/")) {
+                                const blob = await item.getType(type);
+                                const reader = new FileReader();
+                                reader.onload = (e) => {
+                                    handleIncomingImage(e.target.result);
+                                    btn.classList.remove('triggering');
+                                };
+                                reader.readAsDataURL(blob);
+                                return;
+                            }
+                        }
+                    }
+                } catch (err) {
+                    logStatus("⚠️ Нажмите Ctrl+V вручную", "error");
+                }
+                setTimeout(() => btn.classList.remove('triggering'), 500);
+            };
+        }
+        slotBox.focus();
+    }
+
+    logStatus(`🛰️ [${state.assembly.currentIdx + 1}/${state.assembly.queue.length}] Отправка промта...`, "info");
+    
+    state.assembly.lastSentPrompt = rawPrompt;
+    window.postMessage({ type: "ANIMTUBE_CMD", prompt: fullPrompt }, "*");
+    
+    state.assembly.currentIdx++;
+    updateProgressUI();
+    renderQueue();
+}
+
+function updateProgressUI() {
+    const total = state.assembly.queue.length;
+    const current = state.assembly.currentIdx;
+    const percent = (current / total) * 100;
+    document.getElementById('assembly-progress-fill').style.width = `${percent}%`;
+    document.getElementById('assembly-counter').innerText = `${current} / ${total} Промтов отправлено`;
+}
+
+function renderQueue() {
+    const container = document.getElementById('queue-display');
+    if (!container) return;
+    
+    container.innerHTML = state.assembly.queue.map((p, i) => {
+        let statusClass = 'status-pending';
+        let statusText = 'Ждет';
+        
+        if (i < state.assembly.currentIdx - 1) {
+            statusClass = 'status-done';
+            statusText = 'Готово';
+        } else if (i === state.assembly.currentIdx - 1) {
+            statusClass = 'status-working';
+            statusText = state.assembly.isWaitingForImage ? 'В работе' : 'Готово';
+        }
+
+        return `
+            <div class="queue-item ${i === state.assembly.currentIdx - 1 ? 'active' : ''}">
+                <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 10px;">
+                    ${p}
+                </div>
+                <span class="status-badge ${statusClass}">${statusText}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+// --- IMAGE HANDLING ---
+async function handleIncomingImage(base64) {
+    const project = getCurrentProject();
+    if (!project) return;
+
+    // Visual Flash & Animation
+    const flash = document.createElement('div');
+    flash.className = 'paste-flash-overlay flash-active';
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 600);
+
+    const slotBox = document.getElementById('capture-slot');
+    if (slotBox) {
+        slotBox.className = 'receiving-box success';
+        slotBox.innerHTML = `
+            <img src="${base64}" style="animation: dropIn 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);">
+            <div class="slot-label">🎉 КАДР УСПЕШНО ВСТАВЛЕН</div>
+        `;
+    }
+
+    const preview = document.getElementById('preview-frame');
+    if (preview) {
+        preview.src = base64;
+        preview.style.display = 'block';
+        if (document.getElementById('canvas-empty')) document.getElementById('canvas-empty').style.display = 'none';
+    }
+
+    const imgId = "img_" + Date.now();
+    await saveImageToDB(imgId, base64);
+
+    const result = {
+        id: imgId,
+        promptSnippet: state.assembly.lastSentPrompt || "User Image",
+        time: new Date().toLocaleTimeString()
+    };
+    project.results.unshift(result);
+    saveState();
+    
+    renderProjectLibrary();
+    logStatus("✅ Кадр добавлен в библиотеку проекта.", "success");
+
+    if (state.assembly.isRunning && state.assembly.isWaitingForImage) {
+        state.assembly.isWaitingForImage = false;
+        renderQueue();
+        // Wait 2s to show success before next prompt
+        setTimeout(processNextItem, 2000);
+    }
+}
+
+async function renderProjectLibrary() {
+    const project = getCurrentProject();
+    const container = document.getElementById('project-library-container');
+    if (!project || !container) return;
+
+    if (project.results.length === 0) {
+        container.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px;">Библиотека пуста. Ожидайте авто-вставку.</p>`;
+        return;
+    }
+
+    container.innerHTML = "";
+    for (const res of project.results) {
+        const card = document.createElement('div');
+        card.className = "lib-card";
+        const imgData = await getImageFromDB(res.id);
+        
+        card.onclick = () => {
+            const preview = document.getElementById('preview-frame');
+            if (preview) {
+                preview.src = imgData;
+                preview.style.display = 'block';
+                if (document.getElementById('canvas-empty')) document.getElementById('canvas-empty').style.display = 'none';
+            }
+        };
+
+        card.innerHTML = `
+            <img src="${imgData || ''}" class="lib-img">
+            <div class="lib-info">
+                <div class="lib-prompt">"${res.promptSnippet}"</div>
+                <div style="font-size: 10px; opacity: 0.5; margin-top: 5px;">${res.time}</div>
+            </div>
+            <button class="lib-del-btn" onclick="event.stopPropagation(); deleteFrame('${res.id}')">×</button>
+        `;
+        container.appendChild(card);
+    }
+}
+
+async function deleteFrame(id) {
+    if (!confirm("Удалить кадр?")) return;
+    const project = getCurrentProject();
+    project.results = project.results.filter(r => r.id !== id);
+    
+    const transaction = db.transaction(["images"], "readwrite");
+    transaction.objectStore("images").delete(id);
+    
+    saveState();
+    renderProjectLibrary();
+}
+
+// --- UTILS ---
+function getCurrentProject() {
+    return state.projects.find(p => p.id === state.activeProjectId);
+}
+
+function logStatus(msg, type) {
+    const terminal = document.getElementById('studio-terminal');
+    if (!terminal) return;
+    const entry = document.createElement('div');
+    entry.style.color = type === 'success' ? '#10b981' : (type === 'error' ? '#ef4444' : '#5eb5f7');
+    entry.style.marginBottom = '4px';
+    entry.innerHTML = `<span style="opacity:0.4">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+    terminal.appendChild(entry);
+    terminal.scrollTop = terminal.scrollHeight;
+}
+
+function loadKeysData() {
+    document.getElementById('key-gemini').value = state.keys.gemini;
+    document.getElementById('key-grok').value = state.keys.grok;
+}
+
+function saveKeys() {
+    state.keys.gemini = document.getElementById('key-gemini').value;
+    state.keys.grok = document.getElementById('key-grok').value;
+    saveState();
+    alert('Настройки сохранены!');
+}
