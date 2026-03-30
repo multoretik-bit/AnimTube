@@ -1,57 +1,59 @@
 @echo off
 set "repo_url=https://github.com/multoretik-bit/AnimTube.git"
-set "commit_msg=PREMIUM UI RESTORED v1.2 - FINAL RELEASE [%date% %time%]"
 
 echo.
-echo 🎬 [AnimTube Premium Deployer v1.2]
+echo 🎬 AnimTube: Deployment to %repo_url%
 echo --------------------------------------------------
-echo [*] Repository: %repo_url%
 echo.
 
-:: 1. Git Installation Check
+:: 1. Проверка установки Git
 git --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Git is not installed!
+    echo [ERROR] Git не найден! Пожалуйста, скачайте его: https://git-scm.com/
     pause
     exit /b
 )
 
-:: 2. Repository Initialization
-if not exist ".git" (
-    echo [*] Initializing new git repository...
+:: 2. Инициализация (если еще не сделана)
+if not exist .git (
+    echo [*] Инициализация нового репозитория Git...
     git init
-    git branch -M main
+    echo.
 )
 
-:: 3. Remote Configuration
-echo [*] Configuring remote origin...
-git remote set-url origin %repo_url% >nul 2>&1
-if %errorlevel% neq 0 (
-    git remote add origin %repo_url%
-)
-
-:: 4. Force Branch Alignment
+:: 3. Настройка удаленного доступа (Remote)
+echo [*] Настройка адреса GitHub...
+git remote remove origin >nul 2>&1
+git remote add origin %repo_url%
 git branch -M main
 
-:: 5. Staging and Committing
-echo [*] Staging all files...
+:: 4. Подготовка файлов
+echo [*] Индексация файлов...
 git add .
+set /p commit_msg="[?] Сообщение для коммита (Enter для пропуска): "
+if "%commit_msg%"=="" set "commit_msg=Update AnimTube Studio"
+
+echo [*] Коммит изменений...
 git commit -m "%commit_msg%"
 
-:: 6. Pushing to GitHub
-echo [*] Pushing to GitHub (main)...
+:: 5. Отправка в облако
+echo.
+echo [*] Отправка на GitHub (ветка main)...
+echo [!] ВНИМАНИЕ: Если появится окно, введите свои данные от GitHub.
 git push -u origin main --force
 
 if %errorlevel% neq 0 (
     echo.
-    echo [!!!] FAILED to push. 
-    echo Please check if you have permission to push to this repository.
-    echo If this is a new repository, make sure you've authorized GitHub.
+    echo [!!!] ОШИБКА: Не удалось отправить файлы.
+    echo 1. Проверьте интернет.
+    echo 2. Убедитесь, что репозиторий на GitHub существует.
+    echo 3. Проверьте права доступа (нужно быть владельцем репозитория).
 ) else (
     echo.
-    echo 🎉 SUCCESS! Premium AnimTube v1.2 is now on GitHub.
+    echo 🎉 УСПЕШНО! Ваши файлы теперь на GitHub.
+    echo.
+    echo 🌐 Не забудьте включить GitHub Pages в настройках (Settings -> Pages).
 )
 
 echo.
-timeout /t 10
-exit
+pause
