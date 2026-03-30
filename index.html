@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AnimTube Studio v1.2 | PREMIUM RESTORED</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <style>
+        /* ROBOT HUD (Keep local to avoid style.css conflicts) */
+        #robot-cursor { position: fixed; width: 40px; height: 40px; background: rgba(99, 102, 241, 0.3); border: 2px solid var(--accent-primary); border-radius: 50%; pointer-events: none; z-index: 10000; display: none; transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1); }
+        #robo-context-menu { position: fixed; background: #ffffff; border: 1px solid #ababab; box-shadow: 2px 2px 10px rgba(0,0,0,0.3); padding: 4px 0; min-width: 180px; z-index: 10000; font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 12px; color: #000; border-radius: 4px; pointer-events: none; display: none; }
+        .context-item { padding: 6px 20px; display: flex; justify-content: space-between; }
+        .context-item.highlight { background: #91c9f7; }
+        
+        /* Layout Fixes for Hub */
+        .workspace-layout { display: grid; grid-template-columns: 1fr 400px; gap: 40px; height: calc(100vh - 120px); }
+        .ws-left { display: flex; flex-direction: column; overflow: hidden; }
+        .ws-right { display: flex; flex-direction: column; gap: 30px; overflow-y: auto; padding-right: 10px; }
+    </style>
+</head>
+<body>
+    <!-- AUTH MODAL -->
+    <div id="auth-modal" style="display:none; position:fixed; inset:0; background:var(--bg-main); z-index:2000; align-items:center; justify-content:center; backdrop-filter: blur(20px);">
+        <div class="glass-panel" style="text-align:center; width:400px; border-radius: 32px;">
+            <div class="section-header">
+                <h1 style="font-weight: 800; font-size: 32px;">AnimTube Studio</h1>
+                <p>Sign in to your production suite</p>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 30px;">
+                <input type="email" id="auth-email" placeholder="Email Address" style="height: 55px; padding: 0 20px; border-radius: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-glass); color: #fff; font-size: 15px;">
+                <input type="password" id="auth-password" placeholder="Password" style="height: 55px; padding: 0 20px; border-radius: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-glass); color: #fff; font-size: 15px;">
+                <button onclick="window.handleLogin()" class="btn btn-primary" style="height: 55px; font-size: 16px;">Login to Studio</button>
+                <div style="height: 1px; background: var(--border-glass); margin: 10px 0;"></div>
+                <button onclick="window.handleSignUp()" class="btn btn-secondary" style="height: 55px;">Create New Account</button>
+            </div>
+            <p id="auth-error" style="color:#ef4444; font-size:12px; margin-top:20px; display:none;"></p>
+        </div>
+    </div>
+
+    <!-- SIDEBAR -->
+    <nav id="sidebar-nav" class="sidebar">
+        <div class="brand">
+            <div style="width:36px; height:36px; background:var(--accent-primary); border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:900; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);">A</div>
+            <h1>AnimTube</h1>
+        </div>
+        <div class="nav-group">
+            <div class="nav-item active" id="nav-home" onclick="showPage('home')">
+                <span class="nav-icon">🏠</span> Home
+            </div>
+            <div class="nav-item" id="nav-hub" style="display:none;" onclick="showPage('hub')">
+                <span class="nav-icon">📊</span> Project Hub
+            </div>
+        </div>
+        <div style="margin-top:auto; display: flex; flex-direction: column; gap: 5px;">
+            <div class="nav-item" onclick="showPage('settings')" id="nav-settings">
+                <span class="nav-icon">⚙️</span> Settings
+            </div>
+            <div class="nav-item" onclick="window.handleLogout()" style="opacity:0.6; margin-top: 10px; border-top: 1px solid var(--border-glass); padding-top: 20px;">
+                <span class="nav-icon">🚪</span> Logout
+            </div>
+        </div>
+    </nav>
+
+    <main>
+        <!-- PAGE 1: CHANNELS -->
+        <section id="page-home" class="page active">
+            <div class="section-header">
+                <h2>Production Channels</h2>
+                <p>Welcome back! Select your active channel to start generating.</p>
+            </div>
+            <div class="hub-grid" id="channel-list-container">
+                <!-- SSR projects -->
+            </div>
+        </section>
+
+        <!-- PAGE 1.5: HUB -->
+        <section id="page-hub" class="page">
+            <div class="workspace-nav">
+                <div class="back-btn" onclick="showPage('home')">←</div>
+                <div class="section-header" style="margin-bottom:0;">
+                    <h2 id="hub-project-name">Channel Hub</h2>
+                    <p>Select production module for this channel</p>
+                </div>
+            </div>
+            <div class="hub-grid" id="channel-hub-modules">
+                <!-- Modules -->
+            </div>
+        </section>
+
+        <!-- PAGE 2: SERIES LIST -->
+        <section id="page-video-list" class="page">
+            <div class="workspace-nav">
+                <div class="back-btn" onclick="showPage('hub')">←</div>
+                <div class="section-header" style="margin-bottom:0;">
+                    <h2>Series & Episodes</h2>
+                    <p>Select or create a series to manage frames</p>
+                </div>
+            </div>
+            <div class="library-grid" id="video-list-container">
+                <!-- Video Cards (lib-card) -->
+            </div>
+        </section>
+
+        <!-- PAGE 3: FRAMES WORKSPACE -->
+        <section id="page-workspace" class="page">
+            <div class="workspace-nav">
+                <div class="back-btn" onclick="showPage('video-list')">←</div>
+                <div class="section-header" style="margin-bottom:0;">
+                    <h2 id="current-video-name">Workspace</h2>
+                    <p style="color:var(--accent-primary);">v1.2 Production Engine • Premium UI Restored</p>
+                </div>
+            </div>
+
+            <div class="workspace-layout">
+                <!-- Left: Control & Prompts -->
+                <div class="ws-left">
+                    <div class="glass-panel" style="flex: 1; display: flex; flex-direction: column; padding: 25px;">
+                        <div class="terminal" id="robodebug">
+                            > Robotic handshake initialized...
+                        </div>
+                        
+                        <div id="prompt-list-builder" class="prompt-list-builder" style="flex:1; overflow-y:auto; margin-top:20px; padding-right:10px;">
+                            <!-- Prompts (prompt-item) -->
+                        </div>
+
+                        <div style="margin-top: 25px; display: flex; gap: 15px;">
+                            <button class="btn-add-prompt" onclick="window.addPromptToVideo()" style="flex: 1;">
+                                <span style="font-size:18px;">➕</span> Add New Frame
+                            </button>
+                            <button id="btn-start-assembly" class="btn btn-primary" onclick="window.startRollAssembly()" style="flex: 1.5; font-size: 16px; letter-spacing: 1px;">
+                                ЗАПУСК СБОРКИ
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Assets & Slots -->
+                <div class="ws-right">
+                    <!-- Preview Area -->
+                    <div class="glass-panel" style="padding: 20px;">
+                        <h3 style="font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:15px; color:var(--text-secondary);">Video Preview</h3>
+                        <div class="receiving-box" id="preview-container">
+                            <div id="canvas-empty" style="color:var(--text-dim); font-size:11px;">SELECT FRAME TO PREVIEW</div>
+                            <img id="preview-frame" style="display:none; width:100%; height:100%; object-fit:contain;">
+                        </div>
+                    </div>
+
+                    <!-- Robotic Slot -->
+                    <div id="receiving-slot-panel" style="display:none;">
+                        <div class="receiving-box waiting">
+                            <span class="loading-icon" style="font-size:30px;">📥</span>
+                            <div class="slot-label">Robotic Image Slot</div>
+                        </div>
+                    </div>
+
+                    <!-- Assets List -->
+                    <div class="glass-panel" style="padding: 20px;">
+                        <h3 style="font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:15px; color:var(--text-secondary);">Series Assets</h3>
+                        <div id="project-assets-selection" class="library-grid" style="grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top:0;">
+                            <!-- Asset miniatures -->
+                        </div>
+                        <button class="btn btn-secondary" onclick="window.openAssetSelectorModal()" style="width:100%; margin-top:15px; padding:10px; font-size:11px;">Manage Assets</button>
+                    </div>
+
+                    <!-- Add Asset -->
+                    <div class="glass-panel" style="padding: 20px;">
+                        <h3 style="font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:15px; color:var(--text-secondary);">Add New Asset</h3>
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
+                            <input type="text" id="global-asset-name" placeholder="Keyword (e.g. Kitchen)" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-glass); border-radius: 12px; color: #fff; font-size: 13px;">
+                            <button class="btn btn-secondary" onclick="window.triggerGlobalAssetUpload()" style="font-size:11px; padding:10px;">Select Image File</button>
+                            <input type="file" id="global-asset-file" hidden accept="image/*" onchange="window.handlePreviewGlobalAsset(this)">
+                            
+                            <div id="asset-upload-preview" style="display: none; aspect-ratio: 16/9; background: #000; border-radius: 14px; overflow: hidden; border:1px solid var(--accent-primary);">
+                                <img id="temp-asset-preview" style="width: 100%; height: 100%; object-fit: contain;">
+                            </div>
+                            
+                            <button id="btn-final-save-asset" class="btn btn-primary" onclick="window.saveGlobalAsset()" style="width: 100%; display: none; padding: 10px; font-size: 12px;">✅ Save Global Asset</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PAGE 4: SETTINGS -->
+        <section id="page-settings" class="page">
+            <div class="workspace-nav">
+                <div class="back-btn" onclick="showPage('home')">←</div>
+                <div class="section-header">
+                    <h2>Global Settings</h2>
+                    <p>Configure your production environment and AI keys</p>
+                </div>
+            </div>
+            <div class="glass-panel" style="max-width: 650px; margin-top: 30px;">
+                <h4 style="margin-bottom: 12px;">Prompt Prefix (Universal Style)</h4>
+                <textarea id="setting-prefix" placeholder="e.g. Cinematic style, 8k, highly detailed..." style="height: 120px;"></textarea>
+                <button class="btn btn-primary" onclick="window.saveKeys()" style="width:100%; margin-top: 25px;">💾 Save Configuration</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- ROBOT HUD -->
+    <div id="robot-cursor"></div>
+    <div id="robo-context-menu">
+        <div class="context-item">Inspect <span style="opacity:0.5;">F12</span></div>
+        <div class="context-item highlight" id="robo-copy-btn">Copy Image <span style="opacity:0.5;">Ctrl+C</span></div>
+    </div>
+
+    <script src="app.js?v=1.2"></script>
+</body>
+</html>

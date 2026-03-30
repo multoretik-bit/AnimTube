@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "AnimTube Bridge v1.0 PRODUCTION",
+  "version": "1.0",
+  "description": "Production Bridge for AnimTube Studio v1.0.",
+  "permissions": ["activeTab", "scripting", "tabs", "clipboardRead", "clipboardWrite", "offscreen"],
+  "host_permissions": ["https://gemini.google.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*", "https://*.vercel.app/*"],
+      "js": ["content_animtube.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content_gemini.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
