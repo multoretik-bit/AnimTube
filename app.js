@@ -1,6 +1,6 @@
 /**
- * AnimTube PRO v9.6 - REFINED PRODUCTION Engine
- * Sequential Logic: 60s (Gen) -> 3s (Extension Transfer) -> 3s (Studio Landing)
+ * AnimTube PRO v11.1 - GLOBAL ASSET LIBRARY Engine
+ * Sequence: 80s (Gen) -> 3s (Extension) -> 3s (Studio) -> 4s (Reset) = 90s Cycle
  */
 
 let db = null;
@@ -30,8 +30,8 @@ window.onload = async () => {
     loadKeysData();
     renderProjects();
     setupGlobalListeners();
-    console.log("🚀 AnimTube v9.6 Refined Engine loaded.");
-    logStatus("✨ AnimTube v9.6 Pure Production Loaded.", "success");
+    console.log("🚀 AnimTube v11.1 Global Asset Engine loaded.");
+    logStatus("✨ AnimTube v11.1 Global Asset Library Ready.", "success");
 };
 
 function setupGlobalListeners() {
@@ -136,6 +136,9 @@ async function initDB() {
             if (!db.objectStoreNames.contains("images")) {
                 db.createObjectStore("images", { keyPath: "id" });
             }
+            if (!db.objectStoreNames.contains("assets")) {
+                db.createObjectStore("assets", { keyPath: "id" });
+            }
         };
         request.onsuccess = (e) => {
             db = e.target.result;
@@ -180,6 +183,11 @@ function showPage(pageId) {
     if (navItem) navItem.classList.add('active');
     
     if (pageId === 'videos') renderProjects();
+    if (pageId === 'assets') renderGlobalAssets();
+    if (pageId === 'workspace') {
+        renderProjectLibrary();
+        renderProjectAssets();
+    }
 }
 
 // --- PROJECT MANAGEMENT ---
@@ -191,7 +199,8 @@ function createNewProject() {
         id: Date.now(),
         name: name,
         promptsText: "", 
-        results: [],     
+        results: [],
+        assets: [], // Store {id, name} reference
         created: new Date().toLocaleDateString()
     };
 
@@ -235,6 +244,7 @@ function openProject(id) {
     document.getElementById('bulk-prompts').value = project.promptsText || "";
     
     renderProjectLibrary();
+    renderProjectAssets();
     renderQueue();
     showPage('workspace');
 }
@@ -297,6 +307,7 @@ function startRollAssembly() {
     state.assembly.queue = lines;
     state.assembly.currentIdx = 0;
     state.assembly.isRunning = true;
+    state.assembly.lockedProjectId = state.activeProjectId; // Gallery Isolation Lock
     
     document.getElementById('btn-start-assembly').style.display = 'none';
     document.getElementById('btn-stop-assembly').style.display = 'flex';
@@ -317,7 +328,164 @@ function stopRollAssembly(isManual = true) {
     }
 }
 
-function processNextItem() {
+// --- GLOBAL ASSET LIBRARY (v11.1) ---
+window.triggerGlobalAssetUpload = () => {
+    const name = document.getElementById('global-asset-name').value.trim();
+    if (!name) return alert("Введите имя ассета (напр. Пеппа)!");
+    document.getElementById('global-asset-file').click();
+};
+
+window.handleAddGlobalAsset = async (input) => {
+    const nameInput = document.getElementById('global-asset-name');
+    const name = nameInput.value.trim();
+    if (!input.files || !input.files[0]) return;
+
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const base64 = e.target.result;
+        const assetId = "asset_" + Date.now();
+        
+        const transaction = db.transaction(["assets"], "readwrite");
+        transaction.objectStore("assets").put({ id: assetId, base64, name });
+
+        nameInput.value = "";
+        input.value = "";
+        renderGlobalAssets();
+        logStatus(`📦 Ассет "${name}" добавлен в глобальную библиотеку.`, "success");
+    };
+    reader.readAsDataURL(file);
+};
+
+async function renderGlobalAssets() {
+    const container = document.getElementById('global-assets-list');
+    if (!container) return;
+
+    const transaction = db.transaction(["assets"], "readonly");
+    const store = transaction.objectStore("assets");
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+        const assets = request.result;
+        if (assets.length === 0) {
+            container.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px;">Библиотека пуста. Добавьте первого героя или фон.</p>`;
+            return;
+        }
+
+        container.innerHTML = assets.map(a => `
+            <div class="lib-card" style="position: relative;">
+                <img src="${a.base64}" class="lib-img">
+                <div class="lib-info">
+                    <div style="font-weight: 700; font-size: 14px;">${a.name}</div>
+                </div>
+                <button class="lib-del-btn" onclick="deleteGlobalAsset('${a.id}')">×</button>
+            </div>
+        `).join('');
+    };
+}
+
+async function deleteGlobalAsset(id) {
+    if (!confirm("Удалить этот ассет навсегда? Он исчезнет из всех проектов.")) return;
+    const transaction = db.transaction(["assets"], "readwrite");
+    transaction.objectStore("assets").delete(id);
+    
+    // Clean up project references
+    state.projects.forEach(p => {
+        if (p.assets) p.assets = p.assets.filter(a => a.id !== id);
+    });
+    saveState();
+    renderGlobalAssets();
+}
+
+// --- PROJECT ASSET SELECTION ---
+function openAssetSelectorModal() {
+    // Simple implementation: Show all global assets in the terminal with "Add" buttons
+    // In a real app, this would be a proper modal
+    const transaction = db.transaction(["assets"], "readonly");
+    const request = transaction.objectStore("assets").getAll();
+
+    request.onsuccess = () => {
+        const allAssets = request.result;
+        const project = getCurrentProject();
+        if (!project.assets) project.assets = [];
+
+        logStatus("📋 ВЫБЕРИТЕ АССЕТЫ ДЛЯ ЭТОГО ПРОЕКТА:", "info");
+        allAssets.forEach(a => {
+            const isSelected = project.assets.some(pa => pa.id === a.id);
+            if (!isSelected) {
+                const entry = document.createElement('div');
+                entry.style.display = 'flex';
+                entry.style.justifyContent = 'space-between';
+                entry.style.padding = '5px';
+                entry.style.borderBottom = '1px solid #333';
+                entry.innerHTML = `
+                    <span>${a.name}</span>
+                    <button onclick="toggleAssetForProject('${a.id}', true)" style="background:var(--accent-primary); color:white; border:none; border-radius:4px; padding:2px 8px; cursor:pointer;">Добавить</button>
+                `;
+                document.getElementById('studio-terminal').appendChild(entry);
+            }
+        });
+    };
+}
+
+window.toggleAssetForProject = (id, add) => {
+    const project = getCurrentProject();
+    if (!project.assets) project.assets = [];
+    
+    if (add) {
+        const transaction = db.transaction(["assets"], "readonly");
+        const req = transaction.objectStore("assets").get(id);
+        req.onsuccess = () => {
+            const asset = req.result;
+            if (asset && !project.assets.some(a => a.id === id)) {
+                project.assets.push({ id: asset.id, name: asset.name });
+                saveState();
+                renderProjectAssets();
+                logStatus(`✅ Ассет "${asset.name}" привязан к проекту.`, "success");
+            }
+        };
+    } else {
+        project.assets = project.assets.filter(a => a.id !== id);
+        saveState();
+        renderProjectAssets();
+    }
+};
+
+async function renderProjectAssets() {
+    const project = getCurrentProject();
+    const container = document.getElementById('project-assets-selection');
+    if (!project || !container) return;
+
+    if (!project.assets || project.assets.length === 0) {
+        container.innerHTML = `<p style="grid-column: 1/-1; font-size: 11px; color: var(--text-dim);">Ассеты не выбраны.</p>`;
+        return;
+    }
+
+    container.innerHTML = "";
+    for (const assetRef of project.assets) {
+        const transaction = db.transaction(["assets"], "readonly");
+        const request = transaction.objectStore("assets").get(assetRef.id);
+        
+        request.onsuccess = () => {
+            const assetData = request.result;
+            if (!assetData) return;
+            
+            const card = document.createElement('div');
+            card.className = "lib-card";
+            card.style.position = "relative";
+            card.innerHTML = `
+                <img src="${assetData.base64}" class="lib-img" style="height: 70px;">
+                <div class="lib-info" style="padding: 5px;">
+                    <div style="font-size: 10px; font-weight: 700;">${assetData.name}</div>
+                </div>
+                <button class="lib-del-btn" onclick="toggleAssetForProject('${assetRef.id}', false)">×</button>
+            `;
+            container.appendChild(card);
+        };
+    }
+}
+
+async function processNextItem() {
     if (!state.assembly.isRunning) return;
 
     if (state.assembly.currentIdx >= state.assembly.queue.length) {
@@ -386,8 +554,33 @@ function processNextItem() {
 
     logStatus(`🛰️ [${state.assembly.currentIdx + 1}/${state.assembly.queue.length}] Отправка промта...`, "info");
     
+    // ASSET SCANNING (v11.0)
+    const matchingAssets = [];
+    const project = getCurrentProject();
+    if (project && project.assets) {
+        for (const assetRef of project.assets) {
+            // Check if prompt text contains asset name (case insensitive)
+            if (rawPrompt.toLowerCase().includes(assetRef.name.toLowerCase())) {
+                const transaction = db.transaction(["assets"], "readonly");
+                const assetData = await new Promise(r => {
+                    const req = transaction.objectStore("assets").get(assetRef.id);
+                    req.onsuccess = () => r(req.result);
+                });
+                if (assetData) matchingAssets.push(assetData.base64);
+            }
+        }
+    }
+    
+    if (matchingAssets.length > 0) {
+        logStatus(`📦 Найдено ассетов: ${matchingAssets.length}. Инъекция в Gemini...`, "success");
+    }
+
     state.assembly.lastSentPrompt = rawPrompt;
-    window.postMessage({ type: "ANIMTUBE_CMD", prompt: fullPrompt }, "*");
+    window.postMessage({ 
+        type: "ANIMTUBE_CMD", 
+        prompt: fullPrompt,
+        assets: matchingAssets // Send Base64 images for injection
+    }, "*");
     
     state.assembly.currentIdx++;
     updateProgressUI();
@@ -431,7 +624,9 @@ function renderQueue() {
 
 // --- IMAGE HANDLING ---
 async function handleIncomingImage(base64) {
-    const project = getCurrentProject();
+    // Gallery Isolation: Use locked ID if in batch mode
+    const targetId = state.assembly.isRunning ? state.assembly.lockedProjectId : state.activeProjectId;
+    const project = state.projects.find(p => p.id === targetId);
     if (!project) return;
 
     // Visual Flash & Animation
@@ -473,8 +668,9 @@ async function handleIncomingImage(base64) {
     if (state.assembly.isRunning && state.assembly.isWaitingForImage) {
         state.assembly.isWaitingForImage = false;
         renderQueue();
-        // Wait 2s to show success before next prompt
-        setTimeout(processNextItem, 2000);
+        // Wait 4s (v10.3) to show success/flash before next prompt
+        logStatus("⏳ Пауза 4 сек перед следующим промтом...", "info");
+        setTimeout(processNextItem, 4000);
     }
 }
 
